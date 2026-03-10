@@ -1,0 +1,322 @@
+"""
+rhi.py — Ramsey Hallucination Index (RHI) computation.
+
+Tests whether hallucinated tokens in GPT-2 outputs on TruthfulQA form
+PPMI triangles more often than non-hallucinated tokens. This is the
+first empirical test of the Ramsey-hallucination connection.
+
+Methodology:
+    1. For each TruthfulQA question, generate GPT-2's answer.
+    2. Label the answer as hallucinated / not using TruthfulQA ground truth.
+    3. Extract content tokens (remove stopwords).
+    4. Check if any triple of content tokens forms a triangle in G_D.
+    5. Compute RHI_empirical and run a chi-squared test.
+
+WARNING: The RHI → 1 proposition in 01_framework.pdf is not proven.
+We compute RHI_empirical as an *empirical* observation only.
+"""
+
+import csv
+import json
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import numpy as np
+import scipy.sparse as sp
+from scipy.stats import chi2_contingency
+from tqdm import tqdm
+
+# Stopwords — simple English stopword list for content token extraction
+_STOPWORDS: Set[str] = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need", "dare",
+    "ought", "used", "i", "you", "he", "she", "it", "we", "they", "me",
+    "him", "her", "us", "them", "my", "your", "his", "its", "our", "their",
+    "this", "that", "these", "those", "not", "no", "nor", "so", "yet",
+    "both", "either", "neither", "each", "every", "all", "any", "few",
+    "more", "most", "other", "some", "such", "than", "then", "when",
+    "where", "which", "who", "what", "how", "why", "very", "just", "also",
+}
+
+
+def load_truthfulqa(path: str) -> List[Dict]:
+    """
+    Load TruthfulQA CSV file.
+
+    Expected columns: Question, Best Answer, Correct Answers, Incorrect Answers, etc.
+
+    Args:
+        path: Path to TruthfulQA.csv
+
+    Returns:
+        List of dicts with keys: question, best_answer, correct_answers, incorrect_answers.
+    """
+    records = []
+    with open(path, "r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            records.append({
+                "question": row.get("Question", "").strip(),
+                "best_answer": row.get("Best Answer", "").strip(),
+                "correct_answers": row.get("Correct Answers", "").strip(),
+                "incorrect_answers": row.get("Incorrect Answers", "").strip(),
+                "category": row.get("Category", "").strip(),
+            })
+    print(f"Loaded {len(records)} TruthfulQA questions from {path}")
+    return records
+
+
+def generate_gpt2_answers(
+    questions: List[str],
+    max_new_tokens: int = 100,
+    batch_size: int = 8,
+    device: str = "cpu",
+) -> List[str]:
+    """
+    Generate GPT-2 answers for a list of questions.
+
+    Uses greedy decoding (do_sample=False) for reproducibility.
+
+    Args:
+        questions: List of question strings.
+        max_new_tokens: Max tokens to generate per answer.
+        batch_size: Batch size for generation.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        List of generated answer strings (same length as questions).
+    """
+    from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+    print(f"Loading GPT-2 (device={device}) ...")
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    model.eval()
+    if device != "cpu":
+        model = model.to(device)
+
+    answers = []
+    for i in tqdm(range(0, len(questions), batch_size), desc="Generating GPT-2 answers"):
+        batch_qs = questions[i : i + batch_size]
+        inputs = tokenizer(
+            batch_qs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        )
+        if device != "cpu":
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with __import__("torch").no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        for j, output in enumerate(outputs):
+            input_len = inputs["input_ids"].shape[1]
+            generated = output[input_len:]
+            text = tokenizer.decode(generated, skip_special_tokens=True)
+            answers.append(text.strip())
+
+    return answers
+
+
+def is_hallucinated(
+    generated_answer: str,
+    correct_answers: str,
+    incorrect_answers: str,
+) -> Optional[bool]:
+    """
+    Label a generated answer as hallucinated or not.
+
+    Heuristic: an answer is hallucinated if it contains tokens from incorrect_answers
+    but not from correct_answers. Returns None if indeterminate.
+
+    Args:
+        generated_answer: The text generated by GPT-2.
+        correct_answers: Semicolon-separated correct answers from TruthfulQA.
+        incorrect_answers: Semicolon-separated incorrect answers.
+
+    Returns:
+        True if hallucinated, False if correct, None if indeterminate.
+    """
+    gen_tokens = set(re.findall(r"\b\w+\b", generated_answer.lower()))
+
+    correct_set: Set[str] = set()
+    for ans in correct_answers.split(";"):
+        correct_set.update(re.findall(r"\b\w+\b", ans.lower()))
+
+    incorrect_set: Set[str] = set()
+    for ans in incorrect_answers.split(";"):
+        incorrect_set.update(re.findall(r"\b\w+\b", ans.lower()))
+
+    # Remove stopwords
+    correct_set -= _STOPWORDS
+    incorrect_set -= _STOPWORDS
+    gen_tokens -= _STOPWORDS
+
+    if not gen_tokens:
+        return None
+
+    overlap_correct = len(gen_tokens & correct_set)
+    overlap_incorrect = len(gen_tokens & incorrect_set)
+
+    if overlap_correct == 0 and overlap_incorrect == 0:
+        return None  # Can't determine
+    if overlap_incorrect > overlap_correct:
+        return True  # Hallucinated
+    return False  # Correct
+
+
+def extract_content_tokens(text: str, token2id: dict) -> List[int]:
+    """
+    Extract content token IDs from a text string.
+
+    Lowercases, removes stopwords, and keeps only tokens in the vocabulary.
+
+    Args:
+        text: Raw text.
+        token2id: Vocabulary mapping.
+
+    Returns:
+        List of token IDs (may be empty).
+    """
+    tokens = re.findall(r"\b\w+\b", text.lower())
+    return [
+        token2id[t]
+        for t in tokens
+        if t not in _STOPWORDS and t in token2id
+    ]
+
+
+def has_ppmi_triangle(token_ids: List[int], adj: sp.csr_matrix) -> bool:
+    """
+    Check whether any triple of token IDs forms a triangle in G_D.
+
+    A triangle exists if all three pairwise edges are present in the
+    adjacency matrix (i.e., all three PPMI scores > tau).
+
+    Args:
+        token_ids: List of token indices to check.
+        adj: Binary sparse adjacency matrix of G_D.
+
+    Returns:
+        True if at least one triangle exists among the token IDs.
+    """
+    ids = list(set(token_ids))  # deduplicate
+    if len(ids) < 3:
+        return False
+
+    adj_csr = adj.tocsr()
+    for a in range(len(ids)):
+        for b in range(a + 1, len(ids)):
+            if adj_csr[ids[a], ids[b]] == 0:
+                continue
+            for c in range(b + 1, len(ids)):
+                if adj_csr[ids[a], ids[c]] != 0 and adj_csr[ids[b], ids[c]] != 0:
+                    return True
+    return False
+
+
+def compute_rhi(
+    records: List[Dict],
+    generated_answers: List[str],
+    adj: sp.csr_matrix,
+    token2id: dict,
+) -> dict:
+    """
+    Compute the empirical Ramsey Hallucination Index.
+
+    For each record, labels the generated answer, extracts content tokens,
+    and checks for PPMI triangles. Then runs a chi-squared test.
+
+    Args:
+        records: TruthfulQA records (from load_truthfulqa).
+        generated_answers: GPT-2 generated answers (same length as records).
+        adj: Binary sparse adjacency matrix of G_D.
+        token2id: Vocabulary mapping.
+
+    Returns:
+        Dictionary with RHI, contingency table, chi-squared results, and raw data.
+    """
+    results = []
+
+    for rec, answer in tqdm(
+        zip(records, generated_answers),
+        total=len(records),
+        desc="Computing RHI",
+    ):
+        hallucinated = is_hallucinated(
+            answer,
+            rec["correct_answers"],
+            rec["incorrect_answers"],
+        )
+        if hallucinated is None:
+            continue
+
+        token_ids = extract_content_tokens(answer, token2id)
+        has_triangle = has_ppmi_triangle(token_ids, adj)
+
+        results.append({
+            "question": rec["question"],
+            "generated": answer,
+            "hallucinated": hallucinated,
+            "has_ppmi_triangle": has_triangle,
+            "n_content_tokens": len(token_ids),
+        })
+
+    # Build contingency table
+    # Rows: hallucinated (T/F), Cols: has_triangle (T/F)
+    tp = sum(1 for r in results if r["hallucinated"] and r["has_ppmi_triangle"])
+    fp = sum(1 for r in results if r["hallucinated"] and not r["has_ppmi_triangle"])
+    tn = sum(1 for r in results if not r["hallucinated"] and not r["has_ppmi_triangle"])
+    fn = sum(1 for r in results if not r["hallucinated"] and r["has_ppmi_triangle"])
+
+    contingency = np.array([[tp, fp], [fn, tn]])
+
+    # Chi-squared test
+    chi2_stat, p_value, dof, expected = chi2_contingency(contingency)
+
+    n_hallucinated = tp + fp
+    n_correct = fn + tn
+
+    rhi_empirical = tp / n_hallucinated if n_hallucinated > 0 else 0.0
+    triangle_rate_correct = fn / n_correct if n_correct > 0 else 0.0
+
+    summary = {
+        "n_labeled": len(results),
+        "n_hallucinated": int(n_hallucinated),
+        "n_correct": int(n_correct),
+        "contingency_table": {
+            "hallucinated_with_triangle": int(tp),
+            "hallucinated_without_triangle": int(fp),
+            "correct_without_triangle": int(tn),
+            "correct_with_triangle": int(fn),
+        },
+        "rhi_empirical": float(rhi_empirical),
+        "triangle_rate_correct": float(triangle_rate_correct),
+        "chi2_statistic": float(chi2_stat),
+        "p_value": float(p_value),
+        "degrees_of_freedom": int(dof),
+        "significant_at_0.05": bool(p_value < 0.05),
+        "significant_at_0.01": bool(p_value < 0.01),
+        "raw_results": results,
+    }
+
+    print(f"\nRHI Results:")
+    print(f"  Labeled: {len(results)} answers ({n_hallucinated} hallucinated, {n_correct} correct)")
+    print(f"  RHI_empirical: {rhi_empirical:.4f}")
+    print(f"  Triangle rate in hallucinations: {rhi_empirical:.4f}")
+    print(f"  Triangle rate in correct answers: {triangle_rate_correct:.4f}")
+    print(f"  Chi-squared: {chi2_stat:.4f}, p-value: {p_value:.6f}")
+    print(f"  Significant at p<0.05: {p_value < 0.05}")
+
+    return summary
