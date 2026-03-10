@@ -1,0 +1,22 @@
+{
+  "vocab_size": 10000,
+  "window": 5,
+  "thresholds": {
+    "2.0": {
+      "n_vertices": 10000,
+      "n_edges": 2848068,
+      "edge_density": 0.056967056705670566,
+      "degree_mean": 569.6137,
+      "degree_std": 165.57167895600384,
+      "degree_max": 1116,
+      "degree_min": 0,
+      "degree_median": 592.0,
+      "tau": 2.0,
+      "power_law_fit": {
+        "exponent": 0.611119468965712,
+        "r_squared": 0.16449933901645253,
+        "is_power_law": false
+      }
+    }
+  }
+}
