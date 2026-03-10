@@ -27,6 +27,19 @@ import scipy.sparse as sp
 from scipy.stats import chi2_contingency
 from tqdm import tqdm
 
+# Lazy-loaded sentence-transformer model (cached between calls)
+_st_model = None
+
+
+def _get_st_model():
+    """Load and cache the sentence-transformers model."""
+    global _st_model
+    if _st_model is None:
+        from sentence_transformers import SentenceTransformer
+        print("Loading sentence-transformers model (all-MiniLM-L6-v2) ...")
+        _st_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _st_model
+
 # Stopwords — simple English stopword list for content token extraction
 _STOPWORDS: Set[str] = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -174,6 +187,227 @@ def is_hallucinated(
     if overlap_incorrect > overlap_correct:
         return True  # Hallucinated
     return False  # Correct
+
+
+def load_or_build_embeddings(
+    records: List[Dict],
+    generated_answers: List[str],
+    cache_path: str = "data/truthfulqa_embeddings.npz",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load cached embeddings or compute them with sentence-transformers.
+
+    Embeddings are computed for:
+      - generated answers (shape: [N, D])
+      - correct answers — one embedding per record (mean of per-sentence embeddings)
+      - incorrect answers — one embedding per record (mean of per-sentence embeddings)
+
+    Args:
+        records: TruthfulQA records (list of dicts with correct_answers, incorrect_answers).
+        generated_answers: GPT-2 generated texts (same length as records).
+        cache_path: NPZ path to cache/load embeddings.
+
+    Returns:
+        Tuple (gen_embs, correct_embs, incorrect_embs) each of shape [N, D].
+    """
+    cache = Path(cache_path)
+    n = len(records)
+
+    if cache.exists():
+        print(f"Loading cached embeddings from {cache} ...")
+        data = np.load(str(cache))
+        if (
+            "gen_embs" in data
+            and "correct_embs" in data
+            and "incorrect_embs" in data
+            and data["gen_embs"].shape[0] == n
+        ):
+            return data["gen_embs"], data["correct_embs"], data["incorrect_embs"]
+        print("Cache size mismatch — recomputing embeddings.")
+
+    model = _get_st_model()
+
+    # Embed generated answers
+    print(f"Embedding {n} generated answers ...")
+    gen_embs = model.encode(generated_answers, batch_size=64, show_progress_bar=True,
+                            normalize_embeddings=True)
+
+    # Embed correct and incorrect answer sets
+    # Each record may have multiple answers separated by ";"
+    correct_embs = np.zeros((n, gen_embs.shape[1]), dtype=np.float32)
+    incorrect_embs = np.zeros((n, gen_embs.shape[1]), dtype=np.float32)
+
+    print("Embedding correct/incorrect answer sets ...")
+    for i, rec in enumerate(tqdm(records, desc="Embedding answer sets")):
+        correct_parts = [s.strip() for s in rec["correct_answers"].split(";") if s.strip()]
+        incorrect_parts = [s.strip() for s in rec["incorrect_answers"].split(";") if s.strip()]
+
+        if correct_parts:
+            c_embs = model.encode(correct_parts, normalize_embeddings=True)
+            correct_embs[i] = c_embs.mean(axis=0)
+        if incorrect_parts:
+            ic_embs = model.encode(incorrect_parts, normalize_embeddings=True)
+            incorrect_embs[i] = ic_embs.mean(axis=0)
+
+    # Save cache
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        str(cache),
+        gen_embs=gen_embs,
+        correct_embs=correct_embs,
+        incorrect_embs=incorrect_embs,
+    )
+    print(f"Cached embeddings to {cache}")
+
+    return gen_embs, correct_embs, incorrect_embs
+
+
+def is_hallucinated_semantic(
+    gen_emb: np.ndarray,
+    correct_embs_row: np.ndarray,
+    incorrect_embs_row: np.ndarray,
+    threshold: float = 0.1,
+) -> Optional[bool]:
+    """
+    Label a generated answer as hallucinated using semantic cosine similarity.
+
+    The generated answer embedding is compared (dot product, since embeddings
+    are L2-normalised) to the mean correct-answer embedding and the mean
+    incorrect-answer embedding.
+
+    Label logic:
+      - sim_correct  > sim_incorrect + threshold → correct  (False)
+      - sim_incorrect > sim_correct  + threshold → hallucinated (True)
+      - otherwise                                → None (indeterminate)
+
+    Args:
+        gen_emb: L2-normalised embedding of the generated answer, shape [D].
+        correct_embs_row: Mean embedding of correct answers, shape [D].
+        incorrect_embs_row: Mean embedding of incorrect answers, shape [D].
+        threshold: Minimum margin to assign a label (default 0.1).
+
+    Returns:
+        True if hallucinated, False if correct, None if indeterminate.
+    """
+    # Cosine similarity = dot product (embeddings are already normalised)
+    sim_correct = float(np.dot(gen_emb, correct_embs_row))
+    sim_incorrect = float(np.dot(gen_emb, incorrect_embs_row))
+
+    if sim_correct > sim_incorrect + threshold:
+        return False   # Correct
+    if sim_incorrect > sim_correct + threshold:
+        return True    # Hallucinated
+    return None        # Indeterminate
+
+
+def compute_rhi_semantic(
+    records: List[Dict],
+    generated_answers: List[str],
+    adj: sp.csr_matrix,
+    token2id: dict,
+    embeddings_cache: str = "data/truthfulqa_embeddings.npz",
+    threshold: float = 0.1,
+) -> dict:
+    """
+    Compute RHI using semantic similarity labeling instead of token overlap.
+
+    Replaces the noisy token-overlap ``is_hallucinated`` with a
+    sentence-transformer cosine-similarity approach (see ``is_hallucinated_semantic``).
+
+    Args:
+        records: TruthfulQA records.
+        generated_answers: GPT-2 generated answers.
+        adj: Binary sparse adjacency matrix of G_D.
+        token2id: Vocabulary mapping.
+        embeddings_cache: Path to cache sentence-transformer embeddings.
+        threshold: Cosine-similarity margin for labeling (default 0.1).
+
+    Returns:
+        Dictionary with RHI, contingency table, chi-squared results, and raw data.
+        Each raw_result entry also contains 'sim_correct' and 'sim_incorrect'.
+    """
+    gen_embs, correct_embs, incorrect_embs = load_or_build_embeddings(
+        records, generated_answers, cache_path=embeddings_cache
+    )
+
+    results = []
+
+    for i, (rec, answer) in enumerate(tqdm(
+        zip(records, generated_answers),
+        total=len(records),
+        desc="Computing RHI (semantic)",
+    )):
+        gen_emb = gen_embs[i]
+        correct_emb = correct_embs[i]
+        incorrect_emb = incorrect_embs[i]
+
+        hallucinated = is_hallucinated_semantic(
+            gen_emb, correct_emb, incorrect_emb, threshold=threshold
+        )
+        if hallucinated is None:
+            continue
+
+        token_ids = extract_content_tokens(answer, token2id)
+        has_triangle = has_ppmi_triangle(token_ids, adj)
+
+        sim_correct = float(np.dot(gen_emb, correct_emb))
+        sim_incorrect = float(np.dot(gen_emb, incorrect_emb))
+
+        results.append({
+            "question": rec["question"],
+            "generated": answer,
+            "category": rec.get("category", ""),
+            "hallucinated": hallucinated,
+            "has_ppmi_triangle": has_triangle,
+            "n_content_tokens": len(token_ids),
+            "sim_correct": sim_correct,
+            "sim_incorrect": sim_incorrect,
+        })
+
+    # Contingency table
+    tp = sum(1 for r in results if r["hallucinated"] and r["has_ppmi_triangle"])
+    fp = sum(1 for r in results if r["hallucinated"] and not r["has_ppmi_triangle"])
+    tn = sum(1 for r in results if not r["hallucinated"] and not r["has_ppmi_triangle"])
+    fn = sum(1 for r in results if not r["hallucinated"] and r["has_ppmi_triangle"])
+
+    contingency = np.array([[tp, fp], [fn, tn]])
+    chi2_stat, p_value, dof, expected = chi2_contingency(contingency)
+
+    n_hallucinated = tp + fp
+    n_correct = fn + tn
+    rhi_empirical = tp / n_hallucinated if n_hallucinated > 0 else 0.0
+    triangle_rate_correct = fn / n_correct if n_correct > 0 else 0.0
+
+    summary = {
+        "labeling_method": "semantic",
+        "sim_threshold": threshold,
+        "n_labeled": len(results),
+        "n_hallucinated": int(n_hallucinated),
+        "n_correct": int(n_correct),
+        "contingency_table": {
+            "hallucinated_with_triangle": int(tp),
+            "hallucinated_without_triangle": int(fp),
+            "correct_without_triangle": int(tn),
+            "correct_with_triangle": int(fn),
+        },
+        "rhi_empirical": float(rhi_empirical),
+        "triangle_rate_correct": float(triangle_rate_correct),
+        "chi2_statistic": float(chi2_stat),
+        "p_value": float(p_value),
+        "degrees_of_freedom": int(dof),
+        "significant_at_0.05": bool(p_value < 0.05),
+        "significant_at_0.01": bool(p_value < 0.01),
+        "raw_results": results,
+    }
+
+    print(f"\nRHI Results (semantic labeling):")
+    print(f"  Labeled: {len(results)} answers ({n_hallucinated} hallucinated, {n_correct} correct)")
+    print(f"  RHI_empirical: {rhi_empirical:.4f}")
+    print(f"  Triangle rate in correct answers: {triangle_rate_correct:.4f}")
+    print(f"  Chi-squared: {chi2_stat:.4f}, p-value: {p_value:.6f}")
+    print(f"  Significant at p<0.05: {p_value < 0.05}")
+
+    return summary
 
 
 def extract_content_tokens(text: str, token2id: dict) -> List[int]:
