@@ -348,7 +348,13 @@ def compute_rhi_semantic(
             continue
 
         token_ids = extract_content_tokens(answer, token2id)
-        has_triangle = has_ppmi_triangle(token_ids, adj)
+        ids_unique = list(set(token_ids))
+        k = len(ids_unique)
+
+        has_triangle = has_ppmi_triangle(ids_unique, adj)
+        n_triangles = count_ppmi_triangles(ids_unique, adj)
+        max_triangles = k * (k - 1) * (k - 2) // 6
+        triangle_density = n_triangles / max(1, max_triangles)
 
         sim_correct = float(np.dot(gen_emb, correct_emb))
         sim_incorrect = float(np.dot(gen_emb, incorrect_emb))
@@ -359,7 +365,9 @@ def compute_rhi_semantic(
             "category": rec.get("category", ""),
             "hallucinated": hallucinated,
             "has_ppmi_triangle": has_triangle,
-            "n_content_tokens": len(token_ids),
+            "n_content_tokens": k,
+            "n_triangles": n_triangles,
+            "triangle_density": float(triangle_density),
             "sim_correct": sim_correct,
             "sim_incorrect": sim_incorrect,
         })
@@ -377,6 +385,9 @@ def compute_rhi_semantic(
     n_correct = fn + tn
     rhi_empirical = tp / n_hallucinated if n_hallucinated > 0 else 0.0
     triangle_rate_correct = fn / n_correct if n_correct > 0 else 0.0
+
+    # Triangle density t-test (continuous RHI 2.0)
+    density_stats = _compute_triangle_density_stats(results)
 
     summary = {
         "labeling_method": "semantic",
@@ -397,6 +408,7 @@ def compute_rhi_semantic(
         "degrees_of_freedom": int(dof),
         "significant_at_0.05": bool(p_value < 0.05),
         "significant_at_0.01": bool(p_value < 0.01),
+        **density_stats,
         "raw_results": results,
     }
 
@@ -406,6 +418,12 @@ def compute_rhi_semantic(
     print(f"  Triangle rate in correct answers: {triangle_rate_correct:.4f}")
     print(f"  Chi-squared: {chi2_stat:.4f}, p-value: {p_value:.6f}")
     print(f"  Significant at p<0.05: {p_value < 0.05}")
+    print(f"  --- RHI 2.0 (triangle density) ---")
+    print(f"  Mean triangle density (hallucinated): {density_stats['mean_triangle_density_hallucinated']:.6f}")
+    print(f"  Mean triangle density (correct):      {density_stats['mean_triangle_density_correct']:.6f}")
+    if density_stats["density_t_stat"] is not None:
+        print(f"  t-stat: {density_stats['density_t_stat']:.4f}, p-value (one-tailed): {density_stats['density_p_value']:.6f}")
+        print(f"  Density significant at p<0.05: {density_stats['density_significant_at_0.05']}")
 
     return summary
 
@@ -460,6 +478,78 @@ def has_ppmi_triangle(token_ids: List[int], adj: sp.csr_matrix) -> bool:
     return False
 
 
+def count_ppmi_triangles(token_ids: List[int], adj: sp.csr_matrix) -> int:
+    """
+    Count the number of triangles among a set of token IDs in G_D.
+
+    Uses the same brute-force triple enumeration as has_ppmi_triangle but
+    counts all of them. Suitable for the small per-answer token sets
+    (typically k < 30) encountered in RHI computation.
+
+    Args:
+        token_ids: List of token indices (will be deduplicated).
+        adj: Binary sparse adjacency matrix of G_D.
+
+    Returns:
+        Number of triangles (each triangle counted once).
+    """
+    ids = list(set(token_ids))
+    if len(ids) < 3:
+        return 0
+
+    count = 0
+    adj_csr = adj.tocsr()
+    for a in range(len(ids)):
+        for b in range(a + 1, len(ids)):
+            if adj_csr[ids[a], ids[b]] == 0:
+                continue
+            for c in range(b + 1, len(ids)):
+                if adj_csr[ids[a], ids[c]] != 0 and adj_csr[ids[b], ids[c]] != 0:
+                    count += 1
+    return count
+
+
+def _compute_triangle_density_stats(results: list) -> dict:
+    """
+    Compute triangle density summary stats and t-test from a raw results list.
+
+    triangle_density = n_triangles / max(1, C(k, 3))
+    where k = number of unique in-vocab content tokens in the answer.
+
+    The one-tailed t-test tests H1: mean density(hallucinated) > mean density(correct).
+
+    Args:
+        results: List of per-question dicts; each must have 'hallucinated' and
+                 'triangle_density' keys.
+
+    Returns:
+        Dict with mean densities, t-statistic, and p-value.
+    """
+    from scipy.stats import ttest_ind
+
+    hall_densities = [r["triangle_density"] for r in results if r["hallucinated"]]
+    correct_densities = [r["triangle_density"] for r in results if not r["hallucinated"]]
+
+    mean_hall = float(np.mean(hall_densities)) if hall_densities else 0.0
+    mean_correct = float(np.mean(correct_densities)) if correct_densities else 0.0
+
+    density_t_stat = None
+    density_p_value = None
+    if len(hall_densities) >= 2 and len(correct_densities) >= 2:
+        # one-tailed: hallucinated > correct  →  alternative="greater"
+        t_result = ttest_ind(hall_densities, correct_densities, alternative="greater")
+        density_t_stat = float(t_result.statistic)
+        density_p_value = float(t_result.pvalue)
+
+    return {
+        "mean_triangle_density_hallucinated": mean_hall,
+        "mean_triangle_density_correct": mean_correct,
+        "density_t_stat": density_t_stat,
+        "density_p_value": density_p_value,
+        "density_significant_at_0.05": bool(density_p_value is not None and density_p_value < 0.05),
+    }
+
+
 def compute_rhi(
     records: List[Dict],
     generated_answers: List[str],
@@ -470,7 +560,8 @@ def compute_rhi(
     Compute the empirical Ramsey Hallucination Index.
 
     For each record, labels the generated answer, extracts content tokens,
-    and checks for PPMI triangles. Then runs a chi-squared test.
+    checks for PPMI triangles, and computes triangle_density (RHI 2.0).
+    Runs both a chi-squared test (binary) and a t-test (continuous density).
 
     Args:
         records: TruthfulQA records (from load_truthfulqa).
@@ -479,7 +570,8 @@ def compute_rhi(
         token2id: Vocabulary mapping.
 
     Returns:
-        Dictionary with RHI, contingency table, chi-squared results, and raw data.
+        Dictionary with RHI, contingency table, chi-squared results,
+        triangle density stats, and raw data.
     """
     results = []
 
@@ -497,14 +589,22 @@ def compute_rhi(
             continue
 
         token_ids = extract_content_tokens(answer, token2id)
-        has_triangle = has_ppmi_triangle(token_ids, adj)
+        ids_unique = list(set(token_ids))
+        k = len(ids_unique)
+
+        has_triangle = has_ppmi_triangle(ids_unique, adj)
+        n_triangles = count_ppmi_triangles(ids_unique, adj)
+        max_triangles = k * (k - 1) * (k - 2) // 6
+        triangle_density = n_triangles / max(1, max_triangles)
 
         results.append({
             "question": rec["question"],
             "generated": answer,
             "hallucinated": hallucinated,
             "has_ppmi_triangle": has_triangle,
-            "n_content_tokens": len(token_ids),
+            "n_content_tokens": k,
+            "n_triangles": n_triangles,
+            "triangle_density": float(triangle_density),
         })
 
     # Build contingency table
@@ -516,7 +616,7 @@ def compute_rhi(
 
     contingency = np.array([[tp, fp], [fn, tn]])
 
-    # Chi-squared test
+    # Chi-squared test (binary: has triangle or not)
     chi2_stat, p_value, dof, expected = chi2_contingency(contingency)
 
     n_hallucinated = tp + fp
@@ -524,6 +624,9 @@ def compute_rhi(
 
     rhi_empirical = tp / n_hallucinated if n_hallucinated > 0 else 0.0
     triangle_rate_correct = fn / n_correct if n_correct > 0 else 0.0
+
+    # Triangle density t-test (continuous RHI 2.0)
+    density_stats = _compute_triangle_density_stats(results)
 
     summary = {
         "n_labeled": len(results),
@@ -542,6 +645,7 @@ def compute_rhi(
         "degrees_of_freedom": int(dof),
         "significant_at_0.05": bool(p_value < 0.05),
         "significant_at_0.01": bool(p_value < 0.01),
+        **density_stats,
         "raw_results": results,
     }
 
@@ -552,5 +656,11 @@ def compute_rhi(
     print(f"  Triangle rate in correct answers: {triangle_rate_correct:.4f}")
     print(f"  Chi-squared: {chi2_stat:.4f}, p-value: {p_value:.6f}")
     print(f"  Significant at p<0.05: {p_value < 0.05}")
+    print(f"  --- RHI 2.0 (triangle density) ---")
+    print(f"  Mean triangle density (hallucinated): {density_stats['mean_triangle_density_hallucinated']:.6f}")
+    print(f"  Mean triangle density (correct):      {density_stats['mean_triangle_density_correct']:.6f}")
+    if density_stats["density_t_stat"] is not None:
+        print(f"  t-stat: {density_stats['density_t_stat']:.4f}, p-value (one-tailed): {density_stats['density_p_value']:.6f}")
+        print(f"  Density significant at p<0.05: {density_stats['density_significant_at_0.05']}")
 
     return summary
