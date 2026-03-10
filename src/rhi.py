@@ -307,6 +307,7 @@ def compute_rhi_semantic(
     token2id: dict,
     embeddings_cache: str = "data/truthfulqa_embeddings.npz",
     threshold: float = 0.1,
+    min_sim_correct: float = 0.0,
 ) -> dict:
     """
     Compute RHI using semantic similarity labeling instead of token overlap.
@@ -321,6 +322,13 @@ def compute_rhi_semantic(
         token2id: Vocabulary mapping.
         embeddings_cache: Path to cache sentence-transformer embeddings.
         threshold: Cosine-similarity margin for labeling (default 0.1).
+            An answer is labelled only when |sim_correct - sim_incorrect| > threshold.
+        min_sim_correct: Minimum cosine similarity to the correct answers required
+            to assign a "correct" (not hallucinated) label (default 0.0).
+            When > 0, this prevents marginally-closer-to-correct answers from being
+            treated as genuinely correct, reducing the length-confound: longer GPT-2
+            outputs that score slightly higher on correct similarity but below
+            min_sim_correct are left unlabelled (None).
 
     Returns:
         Dictionary with RHI, contingency table, chi-squared results, and raw data.
@@ -346,6 +354,13 @@ def compute_rhi_semantic(
         )
         if hallucinated is None:
             continue
+
+        # Apply min_sim_correct filter: if the answer would be labelled "correct"
+        # but its similarity to correct answers is too low, leave it unlabelled.
+        if not hallucinated:
+            sim_correct = float(np.dot(gen_emb, correct_emb))
+            if sim_correct < min_sim_correct:
+                continue
 
         token_ids = extract_content_tokens(answer, token2id)
         ids_unique = list(set(token_ids))
@@ -392,6 +407,7 @@ def compute_rhi_semantic(
     summary = {
         "labeling_method": "semantic",
         "sim_threshold": threshold,
+        "min_sim_correct": min_sim_correct,
         "n_labeled": len(results),
         "n_hallucinated": int(n_hallucinated),
         "n_correct": int(n_correct),
@@ -413,6 +429,7 @@ def compute_rhi_semantic(
     }
 
     print(f"\nRHI Results (semantic labeling):")
+    print(f"  sim_threshold={threshold}, min_sim_correct={min_sim_correct}")
     print(f"  Labeled: {len(results)} answers ({n_hallucinated} hallucinated, {n_correct} correct)")
     print(f"  RHI_empirical: {rhi_empirical:.4f}")
     print(f"  Triangle rate in correct answers: {triangle_rate_correct:.4f}")

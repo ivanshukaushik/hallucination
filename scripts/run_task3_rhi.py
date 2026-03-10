@@ -271,6 +271,17 @@ def main():
                         help="Path to cache sentence-transformer embeddings")
     parser.add_argument("--sim-threshold", type=float, default=0.1,
                         help="Cosine similarity margin for semantic labeling (default 0.1)")
+    parser.add_argument(
+        "--min-sim-correct",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum cosine similarity to correct answers required to assign a "
+            "'correct' label (default 0.0). Set e.g. 0.3 to avoid labelling "
+            "marginally-closer-to-correct answers as correct, reducing the "
+            "length/fluency confound in GPT-2 continuations."
+        ),
+    )
     # Task C
     parser.add_argument("--per-category", action="store_true",
                         help="Compute per-category RHI breakdown (Task C)")
@@ -357,6 +368,7 @@ def main():
             token2id,
             embeddings_cache=args.embeddings_cache,
             threshold=args.sim_threshold,
+            min_sim_correct=args.min_sim_correct,
         )
         raw_results_semantic = semantic_summary.pop("raw_results", [])
         raw_results_for_category = raw_results_semantic  # Task C will use semantic labels
