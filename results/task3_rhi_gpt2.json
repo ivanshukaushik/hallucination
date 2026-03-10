@@ -18,5 +18,10 @@
   "p_value": 0.26410085477494766,
   "degrees_of_freedom": 1,
   "significant_at_0.05": false,
-  "significant_at_0.01": false
+  "significant_at_0.01": false,
+  "mean_triangle_density_hallucinated": 0.022277232785175932,
+  "mean_triangle_density_correct": 0.023683694559536502,
+  "density_t_stat": -0.17749894520213988,
+  "density_p_value": 0.5704150886395384,
+  "density_significant_at_0.05": false
 }

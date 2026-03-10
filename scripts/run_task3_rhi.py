@@ -187,7 +187,12 @@ def compute_rhi_by_category(raw_results: list, min_n: int = 20) -> list:
     """
     Group RHI raw results by TruthfulQA category and compute per-category stats.
 
-    For categories with >= min_n labeled examples, also runs a chi-squared test.
+    For categories with >= min_n labeled examples, runs a chi-squared test and
+    applies two multiple-comparisons corrections across all tested categories:
+
+      Bonferroni: p_bonferroni = min(1.0, p * n_tested_categories)
+      Benjamini-Hochberg FDR: rank p-values, find the largest k such that
+          p_(k) <= (k / m) * alpha (alpha=0.05), reject all up to rank k.
 
     Args:
         raw_results: List of per-question dicts from compute_rhi / compute_rhi_semantic.
@@ -196,6 +201,8 @@ def compute_rhi_by_category(raw_results: list, min_n: int = 20) -> list:
 
     Returns:
         List of per-category stat dicts, sorted by rhi_category descending.
+        Each entry with a p_value also has p_bonferroni, bonferroni_significant_at_0.05,
+        and bh_significant_at_0.05.
     """
     from scipy.stats import chi2_contingency
     from collections import defaultdict
@@ -229,12 +236,14 @@ def compute_rhi_by_category(raw_results: list, min_n: int = 20) -> list:
             "chi2_statistic": None,
             "p_value": None,
             "significant_at_0.05": None,
+            "p_bonferroni": None,
+            "bonferroni_significant_at_0.05": None,
+            "bh_significant_at_0.05": None,
             "skipped_chi2": n_total < min_n,
         }
 
         if n_total >= min_n and n_hallucinated > 0 and n_correct > 0:
             contingency = np.array([[tp, fp], [fn, tn]])
-            # Guard against all-zero rows/cols
             if contingency.min() >= 0 and contingency.sum() > 0:
                 try:
                     chi2, p, _, _ = chi2_contingency(contingency)
@@ -246,7 +255,42 @@ def compute_rhi_by_category(raw_results: list, min_n: int = 20) -> list:
 
         category_stats.append(entry)
 
+    # ── Multiple comparisons corrections ──────────────────────────────────────
+    # Collect all entries that have a p_value (i.e., were tested)
+    tested = [e for e in category_stats if e["p_value"] is not None]
+    m = len(tested)  # number of hypotheses tested
+
+    if m > 0:
+        alpha = 0.05
+
+        # Bonferroni correction
+        for e in tested:
+            p_bonf = min(1.0, e["p_value"] * m)
+            e["p_bonferroni"] = float(p_bonf)
+            e["bonferroni_significant_at_0.05"] = bool(p_bonf < alpha)
+
+        # Benjamini-Hochberg FDR correction
+        # Sort tested entries by p_value ascending, find largest k where p_(k) <= k/m * alpha
+        sorted_tested = sorted(tested, key=lambda e: e["p_value"])
+        bh_cutoff_idx = -1  # last index that passes BH criterion
+        for k, e in enumerate(sorted_tested, start=1):
+            if e["p_value"] <= (k / m) * alpha:
+                bh_cutoff_idx = k - 1  # 0-indexed
+
+        # All entries up to and including bh_cutoff_idx are BH-significant
+        for k, e in enumerate(sorted_tested):
+            e["bh_significant_at_0.05"] = bool(k <= bh_cutoff_idx)
+
     category_stats.sort(key=lambda r: r["rhi_category"], reverse=True)
+
+    # Print corrections summary
+    if m > 0:
+        n_bonf = sum(1 for e in tested if e.get("bonferroni_significant_at_0.05"))
+        n_bh = sum(1 for e in tested if e.get("bh_significant_at_0.05"))
+        print(f"\n  Multiple comparisons ({m} categories tested):")
+        print(f"    After Bonferroni correction: {n_bonf} significant")
+        print(f"    After BH FDR correction:     {n_bh} significant")
+
     return category_stats
 
 
@@ -271,6 +315,17 @@ def main():
                         help="Path to cache sentence-transformer embeddings")
     parser.add_argument("--sim-threshold", type=float, default=0.1,
                         help="Cosine similarity margin for semantic labeling (default 0.1)")
+    parser.add_argument(
+        "--min-sim-correct",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum cosine similarity to correct answers required to assign a "
+            "'correct' label (default 0.0). Set e.g. 0.3 to avoid labelling "
+            "marginally-closer-to-correct answers as correct, reducing the "
+            "length/fluency confound in GPT-2 continuations."
+        ),
+    )
     # Task C
     parser.add_argument("--per-category", action="store_true",
                         help="Compute per-category RHI breakdown (Task C)")
@@ -357,6 +412,7 @@ def main():
             token2id,
             embeddings_cache=args.embeddings_cache,
             threshold=args.sim_threshold,
+            min_sim_correct=args.min_sim_correct,
         )
         raw_results_semantic = semantic_summary.pop("raw_results", [])
         raw_results_for_category = raw_results_semantic  # Task C will use semantic labels

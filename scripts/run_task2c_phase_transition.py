@@ -24,14 +24,21 @@ The smallest n where Z >= 3 is recorded as n_star.
 
 Outputs
 -------
-  results/task2c_phase_transition.json
+  results/task2c_phase_transition.json        (default sweep)
   results/task2c_phase_transition.png
+  results/task2c_phase_transition_fine.json   (--fine-sweep)
+  results/task2c_phase_transition_fine.png
 
 Usage
 -----
     python scripts/run_task2c_phase_transition.py \\
         --ppmi-cache data/ppmi_matrix.npz \\
         --tau 2.0
+
+    # Fine-sweep below n=50 to locate exact n*:
+    python scripts/run_task2c_phase_transition.py \\
+        --ppmi-cache data/ppmi_matrix.npz \\
+        --tau 2.0 --fine-sweep
 """
 
 import argparse
@@ -49,7 +56,7 @@ import scipy.sparse as sp
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.ppmi import load_ppmi, threshold_ppmi
-from src.sparse_bounds import analyze_sparse_bound
+from src.sparse_bounds import analyze_sparse_bound, graph_statistical_regime
 from src.triangle_counter import count_triangles_matrix
 
 
@@ -166,10 +173,25 @@ def main():
         default=[50, 100, 150, 200, 300, 500, 750, 1000],
         help="Vocabulary sizes to sweep (default: 50 100 150 200 300 500 750 1000)",
     )
+    parser.add_argument(
+        "--fine-sweep",
+        action="store_true",
+        help=(
+            "Sweep n=[5,10,15,20,30,40,50] to find n* below 50. "
+            "Overrides --vocab-sizes and writes to task2c_phase_transition_fine.{json,png}."
+        ),
+    )
     parser.add_argument("--z-threshold", type=float, default=3.0,
                         help="Z-score threshold that defines n* (default 3.0)")
     parser.add_argument("--results-dir", default="results")
     args = parser.parse_args()
+
+    # --fine-sweep overrides --vocab-sizes and changes output filenames
+    if args.fine_sweep:
+        args.vocab_sizes = [5, 10, 15, 20, 30, 40, 50]
+        out_stem = "task2c_phase_transition_fine"
+    else:
+        out_stem = "task2c_phase_transition"
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -221,6 +243,9 @@ def main():
             tau=args.tau,
             vocab_size=n,
         )
+        # analyze_sparse_bound already calls graph_statistical_regime internally,
+        # but we surface it explicitly here for per-experiment reporting
+        row["threshold_context"] = graph_statistical_regime(n_eff, p_D)
         all_results.append(row)
 
         z = row["z_score"]
@@ -238,14 +263,30 @@ def main():
     # ── Summary ───────────────────────────────────────────────────────────────
     z_values = [r["z_score"] for r in all_results]
     summary = {
+        "corpus": "WikiText-103",
+        "graph_construction": (
+            f"PPMI threshold tau={args.tau}, top-degree subgraph, window=5"
+        ),
         "tau": args.tau,
         "z_threshold": args.z_threshold,
         "n_star": n_star,
         "n_star_interpretation": (
-            f"Smallest subgraph (top-degree tokens) where triangle count exceeds "
-            f"G(n,p) expectation by {args.z_threshold}σ: n*={n_star}"
+            f"For this corpus (WikiText-103), under this graph construction "
+            f"(PPMI tau={args.tau}, top-degree subgraph, window=5), the smallest "
+            f"vocabulary size at which observed triangles significantly exceed the "
+            f"G(n,p) baseline by {args.z_threshold}σ is n*={n_star}."
             if n_star is not None
-            else f"No n* found: Z never reached {args.z_threshold} in swept range"
+            else (
+                f"For this corpus (WikiText-103), under this graph construction "
+                f"(PPMI tau={args.tau}, top-degree subgraph, window=5), no "
+                f"vocabulary size in {vocab_sizes} produced Z >= {args.z_threshold}."
+            )
+        ),
+        "n_star_caveat": (
+            "n* is NOT a universal constant. It depends on the corpus, vocabulary "
+            "construction method, co-occurrence window size, and PPMI threshold tau. "
+            "Results from this sweep apply specifically to the configuration above "
+            "and should not be generalised to other corpora or graph constructions."
         ),
         "z_score_min": float(min(z_values)),
         "z_score_max": float(max(z_values)),
@@ -253,23 +294,27 @@ def main():
         "experiments": all_results,
     }
 
-    out_path = results_dir / "task2c_phase_transition.json"
+    out_path = results_dir / f"{out_stem}.json"
     with out_path.open("w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"\nSaved results to {out_path}")
 
-    plot_path = results_dir / "task2c_phase_transition.png"
+    plot_path = results_dir / f"{out_stem}.png"
     plot_phase_transition(all_results, n_star, str(plot_path))
 
     # ── Print summary ─────────────────────────────────────────────────────────
     print("\n=== TASK 2C SUMMARY ===")
+    print(f"Corpus: WikiText-103")
+    print(f"Graph construction: PPMI threshold tau={args.tau}, top-degree subgraph, window=5")
     if n_star is not None:
-        print(f"Phase transition n* = {n_star}")
-        print(f"  At n={n_star}, the PPMI co-occurrence subgraph first has significantly")
-        print(f"  more triangles than expected in G(n,p_D) at the same edge density.")
-        print(f"  This marks the onset of non-random Ramsey structure in the corpus.")
+        print(f"\nn* = {n_star}")
+        print(f"  For THIS corpus and graph construction, n*={n_star} is the smallest")
+        print(f"  vocabulary size where observed triangles significantly exceed the")
+        print(f"  G(n,p_D) random-graph baseline by {args.z_threshold}σ.")
+        print(f"\nCAVEAT: n* is not a universal constant. It depends on corpus,")
+        print(f"  vocabulary construction, window size, and tau. Do not generalise.")
     else:
-        print(f"No phase transition found in the swept range {vocab_sizes}.")
+        print(f"\nNo n* found in the swept range {vocab_sizes}.")
         print(f"Z-scores ranged from {min(z_values):.2f} to {max(z_values):.2f}.")
         print(f"  If Z < 0 everywhere: try lower tau or extend sweep to larger n.")
         print(f"  If Z > 0 but < 3: structure exists but is weak at these sizes.")
