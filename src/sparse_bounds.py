@@ -1,18 +1,47 @@
 """
 sparse_bounds.py — Sparse-corrected triangle bounds for G(n, p) random graphs.
 
-The Goodman bound applies to complete graphs K_n. For the actual sparse
-co-occurrence graph G(n, p_D) produced by PPMI thresholding, the correct
-theoretical baseline is the expected triangle count in a random graph with
-the same edge density p_D.
+IMPORTANT — three distinct threshold concepts
+=============================================
 
-Expected triangles in G(n, p):
-    E[T] = C(n, 3) * p^3
+This module works with three mathematically distinct thresholds.  They are
+related but NOT interchangeable.  Conflating them is a common source of error
+in Ramsey-flavoured hallucination arguments.
 
-Variance (using indicator variables for each triple):
-    Var[T] ≈ C(n,3)*p^3*(1-p^3) + 3*C(n,2)*(n-2)*p^5*(1-p)
+(a) TRIANGLE APPEARANCE THRESHOLD
+    p*_appear ≈ n^{-1}   (more precisely: (6/(n(n-1)(n-2)))^{1/3} ≈ 6^{1/3}/n)
+    Below this edge probability, G(n,p) almost surely contains NO triangles.
+    Above it, the expected number of triangles E[T] = C(n,3)*p^3 grows.
+    Reference: Bollobás (2001), Random Graphs, §3.
 
-The second term accounts for the covariance between triangles sharing an edge.
+(b) RAMSEY COLORING THRESHOLD (Rödl-Ruciński 1993)
+    p*_Ramsey ≈ n^{-1/2}
+    Above this edge probability, G(n,p) almost surely has the property that
+    EVERY 2-coloring of its edges contains a monochromatic triangle.
+    This is the threshold that directly motivates Ramsey-theoretic hallucination
+    arguments — it is far sparser than the complete-graph Goodman bound.
+    Reference: Rödl & Ruciński (1993). Lower bounds on probability thresholds
+    for Ramsey properties. Contemporary Mathematics 144, 317–346.
+
+(c) GRAPH-STATISTICAL EXCESS (what this module measures)
+    The Z-score test here measures whether the observed triangle count in
+    the PPMI graph significantly exceeds E[T] = C(n,3)*p_D^3 for a random
+    graph G(n, p_D) with the same edge density p_D.
+    This is a graph-statistical result — it characterises the PPMI graph as
+    having MORE clustering than an Erdős-Rényi random graph at the same density,
+    which is interpretable as non-random semantic structure in the corpus.
+
+    *** The Z-score test is NOT directly equivalent to a Ramsey coloring
+    theorem. ***  It is inspired by Ramsey-style inevitability arguments: if
+    real text graphs have significantly more triangles than random graphs, there
+    is a structural basis for Ramsey-type hallucination mechanisms.  But
+    empirically exceeding G(n,p) expectation is a weaker and more testable
+    claim than "every 2-coloring must contain a monochromatic triangle."
+
+Summary of thresholds for reference:
+    p*_appear  ≈  n^{-1}      (triangles start appearing)
+    p*_Ramsey  ≈  n^{-1/2}    (Ramsey coloring threshold)
+    p_D (observed PPMI graph)  (graph-statistical regime; usually >> p*_appear)
 
 References:
     Bollobás, B. (2001). Random Graphs. Cambridge University Press.
@@ -22,6 +51,119 @@ References:
 
 from math import comb, sqrt
 from typing import Tuple
+
+
+def triangle_appearance_threshold(n: int) -> float:
+    """
+    Approximate edge probability at which E[triangles] = 1 in G(n, p).
+
+    Setting E[T] = C(n,3)*p^3 = 1 and solving for p:
+        p*_appear = (6 / (n*(n-1)*(n-2)))^{1/3}  ≈  (6/n^3)^{1/3}  =  6^{1/3}/n
+
+    Below this threshold, triangles are vanishingly rare in G(n,p).
+    Above it, E[T] grows and triangles appear with high probability.
+
+    Args:
+        n: Number of vertices.
+
+    Returns:
+        Approximate appearance threshold p*_appear (float).
+    """
+    if n < 3:
+        return 1.0
+    denom = n * (n - 1) * (n - 2)
+    return (6.0 / denom) ** (1.0 / 3.0)
+
+
+def ramsey_coloring_threshold(n: int) -> float:
+    """
+    Approximate Rödl-Ruciński (1993) threshold for the Ramsey coloring property.
+
+    Above this edge probability, G(n, p) almost surely has the property that
+    every 2-coloring of its edges contains a monochromatic triangle (K_3).
+    This is the threshold that directly motivates Ramsey-theoretic arguments
+    about LLM hallucinations — it is the density at which "Ramsey inevitability"
+    kicks in for the co-occurrence graph.
+
+    The threshold scales as p*_Ramsey ~ n^{-1/2}.  The constant factor is known
+    only up to order of magnitude; we use c = 1.0 here as an order-of-magnitude
+    estimate.
+
+    IMPORTANT: This threshold concerns 2-COLORINGS of ALL edges of G(n,p) —
+    a property of the full graph under adversarial coloring.  It is distinct from
+    (a) the appearance threshold (does G(n,p) contain any triangle at all?) and
+    (c) the graph-statistical excess (does the observed graph have more triangles
+    than Erdős-Rényi expectation?).  The paper measures (c), not (b).
+
+    Args:
+        n: Number of vertices.
+
+    Returns:
+        Order-of-magnitude estimate of p*_Ramsey = 1.0 / sqrt(n).
+    """
+    if n < 1:
+        return 1.0
+    return 1.0 / sqrt(n)
+
+
+def graph_statistical_regime(n: int, p: float) -> dict:
+    """
+    Summarise where (n, p) sits relative to the three threshold concepts.
+
+    Used to provide honest framing in results: distinguishing the paper's
+    graph-statistical claim from stronger Ramsey claims.
+
+    Args:
+        n: Number of vertices.
+        p: Observed edge density (p_D).
+
+    Returns:
+        Dict with:
+          "above_appearance_threshold":       bool  — p > p*_appear
+          "above_ramsey_coloring_threshold":  bool  — p > p*_Ramsey
+          "p_appearance":                     float — p*_appear value
+          "p_ramsey_coloring":                float — p*_Ramsey value
+          "note":                             str   — plain-English regime description
+    """
+    p_appear = triangle_appearance_threshold(n)
+    p_ramsey = ramsey_coloring_threshold(n)
+
+    above_appear = p > p_appear
+    above_ramsey = p > p_ramsey
+
+    if above_ramsey:
+        note = (
+            f"p_D={p:.5f} exceeds both the triangle appearance threshold "
+            f"(p*~{p_appear:.5f}) and the Rödl-Ruciński Ramsey coloring threshold "
+            f"(p*~{p_ramsey:.5f}). The graph is in the regime where G(n,p) almost "
+            f"surely forces monochromatic triangles in any 2-coloring. The Z-score "
+            f"test additionally shows whether the observed graph has more triangles "
+            f"than Erdős-Rényi baseline at this density."
+        )
+    elif above_appear:
+        note = (
+            f"p_D={p:.5f} exceeds the triangle appearance threshold "
+            f"(p*~{p_appear:.5f}) but is BELOW the Rödl-Ruciński Ramsey coloring "
+            f"threshold (p*~{p_ramsey:.5f}). Triangles are expected in G(n,p), but "
+            f"the Ramsey coloring property does not necessarily hold. The paper's "
+            f"Z-score result is a graph-statistical excess, not a Ramsey coloring claim."
+        )
+    else:
+        note = (
+            f"p_D={p:.5f} is BELOW the triangle appearance threshold "
+            f"(p*~{p_appear:.5f}). Even in a random G(n,p), few triangles are "
+            f"expected. The Z-score result must be interpreted with care: a large "
+            f"positive Z may simply reflect that a few observed triangles exceed "
+            f"a near-zero expectation."
+        )
+
+    return {
+        "above_appearance_threshold": bool(above_appear),
+        "above_ramsey_coloring_threshold": bool(above_ramsey),
+        "p_appearance": float(p_appear),
+        "p_ramsey_coloring": float(p_ramsey),
+        "note": note,
+    }
 
 
 def sparse_triangle_expected(n: int, p: float) -> float:
@@ -134,12 +276,13 @@ def analyze_sparse_bound(
 
     Returns:
         Dictionary with expected, variance, z_score, sparse_excess_ratio,
-        and interpretation flags.
+        interpretation flags, and threshold_context (from graph_statistical_regime).
     """
     expected = sparse_triangle_expected(n, p)
     variance = sparse_triangle_variance(n, p)
     z = sparse_triangle_zscore(observed, n, p)
     ser = sparse_excess_ratio(observed, n, p)
+    threshold_ctx = graph_statistical_regime(n, p)
 
     return {
         "tau": float(tau),
@@ -156,4 +299,7 @@ def analyze_sparse_bound(
         "significantly_more_than_random": bool(z > 3.0),   # >3σ above expectation
         "significantly_fewer_than_random": bool(z < -3.0),  # >3σ below expectation
         "consistent_with_random": bool(abs(z) <= 3.0),
+        # Honest threshold context — distinguishes appearance, Ramsey coloring, and
+        # graph-statistical claims (see module docstring for full explanation)
+        "threshold_context": threshold_ctx,
     }
