@@ -24,14 +24,21 @@ The smallest n where Z >= 3 is recorded as n_star.
 
 Outputs
 -------
-  results/task2c_phase_transition.json
+  results/task2c_phase_transition.json        (default sweep)
   results/task2c_phase_transition.png
+  results/task2c_phase_transition_fine.json   (--fine-sweep)
+  results/task2c_phase_transition_fine.png
 
 Usage
 -----
     python scripts/run_task2c_phase_transition.py \\
         --ppmi-cache data/ppmi_matrix.npz \\
         --tau 2.0
+
+    # Fine-sweep below n=50 to locate exact n*:
+    python scripts/run_task2c_phase_transition.py \\
+        --ppmi-cache data/ppmi_matrix.npz \\
+        --tau 2.0 --fine-sweep
 """
 
 import argparse
@@ -166,10 +173,25 @@ def main():
         default=[50, 100, 150, 200, 300, 500, 750, 1000],
         help="Vocabulary sizes to sweep (default: 50 100 150 200 300 500 750 1000)",
     )
+    parser.add_argument(
+        "--fine-sweep",
+        action="store_true",
+        help=(
+            "Sweep n=[5,10,15,20,30,40,50] to find n* below 50. "
+            "Overrides --vocab-sizes and writes to task2c_phase_transition_fine.{json,png}."
+        ),
+    )
     parser.add_argument("--z-threshold", type=float, default=3.0,
                         help="Z-score threshold that defines n* (default 3.0)")
     parser.add_argument("--results-dir", default="results")
     args = parser.parse_args()
+
+    # --fine-sweep overrides --vocab-sizes and changes output filenames
+    if args.fine_sweep:
+        args.vocab_sizes = [5, 10, 15, 20, 30, 40, 50]
+        out_stem = "task2c_phase_transition_fine"
+    else:
+        out_stem = "task2c_phase_transition"
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -253,12 +275,12 @@ def main():
         "experiments": all_results,
     }
 
-    out_path = results_dir / "task2c_phase_transition.json"
+    out_path = results_dir / f"{out_stem}.json"
     with out_path.open("w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"\nSaved results to {out_path}")
 
-    plot_path = results_dir / "task2c_phase_transition.png"
+    plot_path = results_dir / f"{out_stem}.png"
     plot_phase_transition(all_results, n_star, str(plot_path))
 
     # ── Print summary ─────────────────────────────────────────────────────────
