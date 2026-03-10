@@ -11,6 +11,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterator, List, Tuple
 
+import numpy as np
+import scipy.sparse as sp
 from tqdm import tqdm
 
 
@@ -108,6 +110,91 @@ def build_vocabulary(
 
     print(f"Vocabulary: {len(token2id)} tokens (min_freq={min_freq}, vocab_size={vocab_size})")
     return token2id, id2token
+
+
+def build_local_cooccurrence_matrix(
+    corpus_path: str,
+    token2id: dict,
+    vocab_size: int = 10_000,
+    window_size: int = 5,
+    cache_dir: str = "data",
+) -> sp.csr_matrix:
+    """
+    Build a sparse integer matrix C where C[i, j] = number of times tokens i
+    and j co-occur within a sliding window of size window_size in the corpus.
+
+    This is the raw co-occurrence count (not PPMI). It provides local grounding
+    for the nonlocal-triangle classifier: a high-PPMI pair with low local
+    co-occurrence count is "globally associated but locally ungrounded."
+
+    Results are cached at:
+        {cache_dir}/local_cooc_matrix_v{vocab_size}_w{window_size}.npz
+
+    Args:
+        corpus_path: Path to JSONL corpus.
+        token2id: Vocabulary mapping (token -> id), length must be <= vocab_size.
+        vocab_size: Used only for cache filename identification.
+        window_size: Half-window size — pairs within ±window_size positions
+                     around each token are counted (same convention as iter_windows).
+        cache_dir: Directory to store the NPZ cache.
+
+    Returns:
+        Symmetric sparse CSR matrix of shape (V, V) where V = len(token2id),
+        dtype int32.
+    """
+    cache_path = Path(cache_dir) / f"local_cooc_matrix_v{vocab_size}_w{window_size}.npz"
+
+    if cache_path.exists():
+        print(f"Loading cached local co-occurrence matrix from {cache_path} ...")
+        loaded = np.load(str(cache_path))
+        mat = sp.csr_matrix(
+            (loaded["data"], loaded["indices"], loaded["indptr"]),
+            shape=tuple(loaded["shape"]),
+        )
+        print(f"  Loaded: shape={mat.shape}, nnz={mat.nnz:,}")
+        return mat
+
+    V = len(token2id)
+    print(f"Building local co-occurrence matrix (V={V}, window={window_size}) ...")
+
+    # Use a dictionary accumulator to avoid large intermediate arrays
+    from collections import defaultdict
+    counts: dict = defaultdict(int)
+
+    for sentence in tqdm(iter_sentences(corpus_path), desc="Local co-occurrence"):
+        ids = [token2id[t] for t in sentence if t in token2id]
+        n = len(ids)
+        for i in range(n):
+            lo = max(0, i - window_size)
+            hi = min(n, i + window_size + 1)
+            for j in range(lo, hi):
+                if i != j:
+                    a, b = (ids[i], ids[j]) if ids[i] <= ids[j] else (ids[j], ids[i])
+                    counts[(a, b)] += 1
+
+    # Build symmetric sparse matrix
+    rows, cols, data = [], [], []
+    for (a, b), cnt in counts.items():
+        rows.append(a); cols.append(b); data.append(cnt)
+        if a != b:
+            rows.append(b); cols.append(a); data.append(cnt)
+
+    mat = sp.csr_matrix(
+        (np.array(data, dtype=np.int32), (np.array(rows), np.array(cols))),
+        shape=(V, V),
+    )
+
+    # Save cache
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        str(cache_path),
+        data=mat.data,
+        indices=mat.indices,
+        indptr=mat.indptr,
+        shape=np.array(mat.shape),
+    )
+    print(f"Saved local co-occurrence matrix to {cache_path} (nnz={mat.nnz:,})")
+    return mat
 
 
 def iter_windows(

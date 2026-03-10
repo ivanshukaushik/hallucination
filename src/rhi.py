@@ -526,6 +526,224 @@ def count_ppmi_triangles(token_ids: List[int], adj: sp.csr_matrix) -> int:
     return count
 
 
+def is_nonlocal_triangle(
+    t_i: int,
+    t_j: int,
+    t_k: int,
+    adj: sp.csr_matrix,
+    local_cooc: sp.csr_matrix,
+    local_threshold: int = 10,
+) -> bool:
+    """
+    Test whether (t_i, t_j, t_k) is a NONLOCAL PPMI triangle.
+
+    A nonlocal PPMI triangle satisfies two conditions:
+      1. All three pairwise edges are present in the PPMI adjacency matrix
+         (i.e., PPMI(t_i, t_j), PPMI(t_i, t_k), PPMI(t_j, t_k) all > tau).
+      2. At least one pair has a LOCAL co-occurrence count strictly below
+         `local_threshold` in the training corpus (5-token window).
+
+    Condition 2 operationalises "high global statistical association with weak
+    local grounding": the pair appears often enough across the corpus for PPMI
+    to be high, but rarely appears in close proximity.  This is more defensible
+    than "zero co-occurrence" (which would be called "spurious by construction"
+    — too strong a claim for naturally occurring text).
+
+    Setting local_threshold=10 means at least one pair co-occurs fewer than
+    10 times in any 5-token window across the training corpus.  Tune this
+    parameter; higher values include more triangles (less strict criterion).
+
+    Args:
+        t_i, t_j, t_k: Token IDs forming the candidate triangle.
+        adj: Binary sparse CSR adjacency matrix of G_D (PPMI threshold).
+        local_cooc: Sparse integer CSR matrix of raw 5-token-window co-occurrence
+                    counts (from corpus.build_local_cooccurrence_matrix).
+        local_threshold: Minimum local co-occurrence below which a pair is
+                         considered "locally ungrounded" (default 10).
+
+    Returns:
+        True if the triple is both a PPMI triangle AND has at least one locally
+        ungrounded edge. False otherwise.
+    """
+    adj_csr = adj.tocsr()
+    # Check all three PPMI edges exist
+    if adj_csr[t_i, t_j] == 0 or adj_csr[t_i, t_k] == 0 or adj_csr[t_j, t_k] == 0:
+        return False
+
+    # Check that at least one pair has low local co-occurrence
+    cooc_csr = local_cooc.tocsr()
+    c_ij = int(cooc_csr[t_i, t_j])
+    c_ik = int(cooc_csr[t_i, t_k])
+    c_jk = int(cooc_csr[t_j, t_k])
+
+    return (c_ij < local_threshold) or (c_ik < local_threshold) or (c_jk < local_threshold)
+
+
+def count_nonlocal_ppmi_triangles(
+    token_ids: List[int],
+    adj: sp.csr_matrix,
+    local_cooc: sp.csr_matrix,
+    local_threshold: int = 10,
+) -> int:
+    """
+    Count nonlocal PPMI triangles among the given token IDs.
+
+    Uses is_nonlocal_triangle() for each candidate triple.  The count is
+    a stricter and more theoretically defensible RHI metric than bare
+    PPMI triangle presence (count_ppmi_triangles), because it filters out
+    triangles that are well-grounded in local context.
+
+    Args:
+        token_ids: List of token indices (will be deduplicated).
+        adj: Binary sparse CSR adjacency matrix of G_D.
+        local_cooc: Sparse integer co-occurrence count matrix.
+        local_threshold: Local co-occurrence threshold (default 10).
+
+    Returns:
+        Number of nonlocal PPMI triangles (int).
+    """
+    ids = list(set(token_ids))
+    if len(ids) < 3:
+        return 0
+
+    count = 0
+    for a in range(len(ids)):
+        for b in range(a + 1, len(ids)):
+            for c in range(b + 1, len(ids)):
+                if is_nonlocal_triangle(
+                    ids[a], ids[b], ids[c], adj, local_cooc, local_threshold
+                ):
+                    count += 1
+    return count
+
+
+def compute_rhi_nonlocal(
+    records: List[Dict],
+    generated_answers: List[str],
+    adj: sp.csr_matrix,
+    token2id: dict,
+    local_cooc: sp.csr_matrix,
+    local_threshold: int = 10,
+) -> dict:
+    """
+    Compute RHI using nonlocal PPMI triangle detection.
+
+    Identical to compute_rhi() but replaces the bare PPMI triangle test with
+    the nonlocal triangle criterion: a triple must be a PPMI triangle AND have
+    at least one pair with local co-occurrence count < local_threshold.
+
+    This is a stricter, more theoretically defensible metric.  A positive RHI
+    with the nonlocal criterion provides stronger evidence for the Ramsey
+    mechanism: hallucinated answers disproportionately contain PPMI triangles
+    that are globally associated but locally ungrounded in the training corpus.
+
+    The hallucination labeling uses the same token-overlap heuristic as compute_rhi().
+    For semantic labeling, use compute_rhi_semantic() and pass the results through
+    this function's logic externally (or pair with run_task3_nonlocal_rhi.py).
+
+    Args:
+        records: TruthfulQA records (from load_truthfulqa).
+        generated_answers: GPT-2 generated answers (same length as records).
+        adj: Binary sparse adjacency matrix of G_D.
+        token2id: Vocabulary mapping.
+        local_cooc: Sparse integer co-occurrence count matrix
+                    (from corpus.build_local_cooccurrence_matrix).
+        local_threshold: Co-occurrence threshold defining "locally ungrounded"
+                         (default 10; 0 is "spurious by construction" — too strict).
+
+    Returns:
+        Dictionary with the same shape as compute_rhi(), plus:
+          "local_threshold": int
+          "metric": "nonlocal_ppmi_triangle"
+    """
+    results = []
+
+    for rec, answer in tqdm(
+        zip(records, generated_answers),
+        total=len(records),
+        desc="Computing nonlocal RHI",
+    ):
+        hallucinated = is_hallucinated(
+            answer,
+            rec["correct_answers"],
+            rec["incorrect_answers"],
+        )
+        if hallucinated is None:
+            continue
+
+        token_ids = extract_content_tokens(answer, token2id)
+        ids_unique = list(set(token_ids))
+        k = len(ids_unique)
+
+        n_triangles = count_nonlocal_ppmi_triangles(ids_unique, adj, local_cooc, local_threshold)
+        has_triangle = n_triangles > 0
+        max_triangles = k * (k - 1) * (k - 2) // 6
+        triangle_density = n_triangles / max(1, max_triangles)
+
+        results.append({
+            "question": rec["question"],
+            "generated": answer,
+            "category": rec.get("category", ""),
+            "hallucinated": hallucinated,
+            "has_ppmi_triangle": has_triangle,
+            "n_content_tokens": k,
+            "n_triangles": n_triangles,
+            "triangle_density": float(triangle_density),
+        })
+
+    # Contingency table
+    tp = sum(1 for r in results if r["hallucinated"] and r["has_ppmi_triangle"])
+    fp = sum(1 for r in results if r["hallucinated"] and not r["has_ppmi_triangle"])
+    tn = sum(1 for r in results if not r["hallucinated"] and not r["has_ppmi_triangle"])
+    fn = sum(1 for r in results if not r["hallucinated"] and r["has_ppmi_triangle"])
+
+    contingency = np.array([[tp, fp], [fn, tn]])
+    chi2_stat, p_value, dof, _ = chi2_contingency(contingency)
+
+    n_hallucinated = tp + fp
+    n_correct = fn + tn
+    rhi_empirical = tp / n_hallucinated if n_hallucinated > 0 else 0.0
+    triangle_rate_correct = fn / n_correct if n_correct > 0 else 0.0
+    density_stats = _compute_triangle_density_stats(results)
+
+    summary = {
+        "metric": "nonlocal_ppmi_triangle",
+        "local_threshold": local_threshold,
+        "n_labeled": len(results),
+        "n_hallucinated": int(n_hallucinated),
+        "n_correct": int(n_correct),
+        "contingency_table": {
+            "hallucinated_with_triangle": int(tp),
+            "hallucinated_without_triangle": int(fp),
+            "correct_without_triangle": int(tn),
+            "correct_with_triangle": int(fn),
+        },
+        "rhi_empirical": float(rhi_empirical),
+        "triangle_rate_correct": float(triangle_rate_correct),
+        "chi2_statistic": float(chi2_stat),
+        "p_value": float(p_value),
+        "degrees_of_freedom": int(dof),
+        "significant_at_0.05": bool(p_value < 0.05),
+        "significant_at_0.01": bool(p_value < 0.01),
+        **density_stats,
+        "raw_results": results,
+    }
+
+    print(f"\nNonlocal RHI Results (local_threshold={local_threshold}):")
+    print(f"  Labeled: {len(results)} ({n_hallucinated} hallucinated, {n_correct} correct)")
+    print(f"  RHI_empirical (nonlocal): {rhi_empirical:.4f}")
+    print(f"  Triangle rate in correct (nonlocal): {triangle_rate_correct:.4f}")
+    print(f"  Chi-squared: {chi2_stat:.4f}, p-value: {p_value:.6f}")
+    print(f"  Significant at p<0.05: {p_value < 0.05}")
+    print(f"  --- Nonlocal density (RHI 2.0) ---")
+    print(f"  Mean nonlocal density (hallucinated): {density_stats['mean_triangle_density_hallucinated']:.6f}")
+    print(f"  Mean nonlocal density (correct):      {density_stats['mean_triangle_density_correct']:.6f}")
+    if density_stats["density_t_stat"] is not None:
+        print(f"  t-stat: {density_stats['density_t_stat']:.4f}, p (one-tailed): {density_stats['density_p_value']:.6f}")
+
+    return summary
+
+
 def _compute_triangle_density_stats(results: list) -> dict:
     """
     Compute triangle density summary stats and t-test from a raw results list.
