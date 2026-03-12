@@ -1,0 +1,44 @@
+==============================================================================
+PROVERBS CATEGORY — TOP HALLUCINATION-SPECIFIC PPMI TRIANGLES
+==============================================================================
+Proverb questions: 18
+Labeled: 7 hallucinated, 11 correct
+RHI (Proverbs): 0.857
+
+Rank  Tokens                               Hall  Corr  PPMI_min  PPMI_mean   Corpus
+------------------------------------------------------------------------------
+1     re — going — think                      1     0     3.149      3.798      212
+2     place — fourth — fifth                  1     0     3.141      3.669      184
+3     u — court — supreme                     1     0     2.738      5.019     2002
+4     going — know — think                    1     0     3.616      3.679        9
+5     going — think — happen                  1     0     3.616      4.491       54
+6     going — think — feel                    1     0     2.415      2.909       15
+7     if — know — sure                        1     0     2.767      3.098        1
+8     law — protection — discrimination       1     0     2.891      3.122        5
+9     re — know — sure                        1     0     3.156      3.199       13
+10    re — know — talking                     1     0     3.156      3.514       64
+11    know — think — happen                   1     0     3.443      3.659        0
+12    know — think — feel                     1     0     2.452      2.923        0
+13    strike — lightning — strikes            1     0     3.364      5.503        4
+14    law — protection — equal                1     0     2.820      3.914      177
+15    protection — equal — discrimination     1     0     2.934      4.090       19
+16    second — third — place                  1     0     2.576      2.771      954
+17    place — fourth — sixth                  1     0     3.141      3.410       50
+18    make — going — happen                   1     0     2.061      4.047       31
+19    make — going — feel                     1     0     2.061      2.889       20
+20    against — protection — discrimination     1     0     3.011      3.696       13
+------------------------------------------------------------------------------
+
+Columns:
+  Hall   = times this triangle appears in hallucinated answers
+  Corr   = times this triangle appears in correct answers
+  PPMI_min  = minimum pairwise PPMI among the 3 edges
+  PPMI_mean = mean pairwise PPMI
+  Corpus = co-occurrence count within 5-token window in WikiText-103
+
+Interpretation:
+  High Corpus count + high Hall + low Corr → cliché phrase GPT-2
+  over-generates because it is densely represented in training data.
+  This is evidence of the Ramsey mechanism: spurious triangles in the
+  PPMI graph drive GPT-2 toward training-data attractors (hallucinations).
+==============================================================================

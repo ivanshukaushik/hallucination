@@ -1,0 +1,32 @@
+{
+  "tau": 2.0,
+  "vocab_size": 10000,
+  "model": "gpt2",
+  "dataset": "TruthfulQA",
+  "metric": "nonlocal_ppmi_triangle",
+  "labeling_method": "semantic",
+  "local_threshold": 10,
+  "sim_threshold": 0.0,
+  "min_sim_correct": 0.3,
+  "n_labeled": 697,
+  "n_hallucinated": 450,
+  "n_correct": 247,
+  "contingency_table": {
+    "hallucinated_with_triangle": 44,
+    "hallucinated_without_triangle": 406,
+    "correct_without_triangle": 209,
+    "correct_with_triangle": 38
+  },
+  "rhi_empirical": 0.09777777777777778,
+  "triangle_rate_correct": 0.15384615384615385,
+  "chi2_statistic": 4.304332958464537,
+  "p_value": 0.0380154007795029,
+  "degrees_of_freedom": 1,
+  "significant_at_0.05": true,
+  "significant_at_0.01": false,
+  "mean_triangle_density_hallucinated": 0.0045693150750942295,
+  "mean_triangle_density_correct": 0.0034825830737451303,
+  "density_t_stat": 0.33927661465254905,
+  "density_p_value": 0.36725192433804843,
+  "density_significant_at_0.05": false
+}
