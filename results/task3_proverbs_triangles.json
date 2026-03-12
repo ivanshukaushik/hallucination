@@ -1,0 +1,413 @@
+{
+  "tau": 2.0,
+  "vocab_size": 10000,
+  "sim_threshold": 0.0,
+  "n_proverb_questions": 18,
+  "n_labeled": 18,
+  "n_hallucinated": 7,
+  "n_correct": 11,
+  "rhi_proverbs": 0.8571428571428571,
+  "n_unique_hall_triangles": 47,
+  "top_hallucination_triangles": [
+    {
+      "tokens": [
+        "re",
+        "going",
+        "think"
+      ],
+      "token_ids": [
+        404,
+        735,
+        1178
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 4.627888728980804,
+      "ppmi_13": 3.1493845545787806,
+      "ppmi_23": 3.6163322575549244,
+      "ppmi_min": 3.1493845545787806,
+      "ppmi_mean": 3.7978685137048362,
+      "corpus_cooccurrence_count": 212
+    },
+    {
+      "tokens": [
+        "place",
+        "fourth",
+        "fifth"
+      ],
+      "token_ids": [
+        223,
+        560,
+        870
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.1409295073449077,
+      "ppmi_13": 3.2000141924348546,
+      "ppmi_23": 4.666845583971217,
+      "ppmi_min": 3.1409295073449077,
+      "ppmi_mean": 3.6692630945836595,
+      "corpus_cooccurrence_count": 184
+    },
+    {
+      "tokens": [
+        "u",
+        "court",
+        "supreme"
+      ],
+      "token_ids": [
+        271,
+        375,
+        1962
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.738244377934991,
+      "ppmi_13": 4.191010268849419,
+      "ppmi_23": 8.126618090904657,
+      "ppmi_min": 2.738244377934991,
+      "ppmi_mean": 5.018624245896356,
+      "corpus_cooccurrence_count": 2002
+    },
+    {
+      "tokens": [
+        "going",
+        "know",
+        "think"
+      ],
+      "token_ids": [
+        735,
+        1056,
+        1178
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.798357131766834,
+      "ppmi_13": 3.6163322575549244,
+      "ppmi_23": 3.621006015534409,
+      "ppmi_min": 3.6163322575549244,
+      "ppmi_mean": 3.6785651349520556,
+      "corpus_cooccurrence_count": 9
+    },
+    {
+      "tokens": [
+        "going",
+        "think",
+        "happen"
+      ],
+      "token_ids": [
+        735,
+        1178,
+        5140
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.6163322575549244,
+      "ppmi_13": 5.943078657445319,
+      "ppmi_23": 3.9124042321683024,
+      "ppmi_min": 3.6163322575549244,
+      "ppmi_mean": 4.490605049056183,
+      "corpus_cooccurrence_count": 54
+    },
+    {
+      "tokens": [
+        "going",
+        "think",
+        "feel"
+      ],
+      "token_ids": [
+        735,
+        1178,
+        1546
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.6163322575549244,
+      "ppmi_13": 2.415020388503138,
+      "ppmi_23": 2.6966238880797637,
+      "ppmi_min": 2.415020388503138,
+      "ppmi_mean": 2.9093255113792753,
+      "corpus_cooccurrence_count": 15
+    },
+    {
+      "tokens": [
+        "if",
+        "know",
+        "sure"
+      ],
+      "token_ids": [
+        166,
+        1056,
+        3683
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.249006815110095,
+      "ppmi_13": 2.7667844680574953,
+      "ppmi_23": 3.277046007034042,
+      "ppmi_min": 2.7667844680574953,
+      "ppmi_mean": 3.0976124300672105,
+      "corpus_cooccurrence_count": 1
+    },
+    {
+      "tokens": [
+        "law",
+        "protection",
+        "discrimination"
+      ],
+      "token_ids": [
+        468,
+        1762,
+        7493
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.891346020758548,
+      "ppmi_13": 3.1689400386207356,
+      "ppmi_23": 3.3050620378119264,
+      "ppmi_min": 2.891346020758548,
+      "ppmi_mean": 3.1217826990637363,
+      "corpus_cooccurrence_count": 5
+    },
+    {
+      "tokens": [
+        "re",
+        "know",
+        "sure"
+      ],
+      "token_ids": [
+        404,
+        1056,
+        3683
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.1559926238348917,
+      "ppmi_13": 3.1646457039490863,
+      "ppmi_23": 3.277046007034042,
+      "ppmi_min": 3.1559926238348917,
+      "ppmi_mean": 3.1992281116060064,
+      "corpus_cooccurrence_count": 13
+    },
+    {
+      "tokens": [
+        "re",
+        "know",
+        "talking"
+      ],
+      "token_ids": [
+        404,
+        1056,
+        3927
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.1559926238348917,
+      "ppmi_13": 3.870899328353512,
+      "ppmi_23": 3.51371391338202,
+      "ppmi_min": 3.1559926238348917,
+      "ppmi_mean": 3.5135352885234745,
+      "corpus_cooccurrence_count": 64
+    },
+    {
+      "tokens": [
+        "know",
+        "think",
+        "happen"
+      ],
+      "token_ids": [
+        1056,
+        1178,
+        5140
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.621006015534409,
+      "ppmi_13": 3.4430792083251545,
+      "ppmi_23": 3.9124042321683024,
+      "ppmi_min": 3.4430792083251545,
+      "ppmi_mean": 3.658829818675955,
+      "corpus_cooccurrence_count": 0
+    },
+    {
+      "tokens": [
+        "know",
+        "think",
+        "feel"
+      ],
+      "token_ids": [
+        1056,
+        1178,
+        1546
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.621006015534409,
+      "ppmi_13": 2.4518591222557737,
+      "ppmi_23": 2.6966238880797637,
+      "ppmi_min": 2.4518591222557737,
+      "ppmi_mean": 2.9231630086233156,
+      "corpus_cooccurrence_count": 0
+    },
+    {
+      "tokens": [
+        "strike",
+        "lightning",
+        "strikes"
+      ],
+      "token_ids": [
+        1937,
+        4783,
+        5036
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 5.519075900269371,
+      "ppmi_13": 3.3644530831652575,
+      "ppmi_23": 7.626327887762351,
+      "ppmi_min": 3.3644530831652575,
+      "ppmi_mean": 5.503285623732327,
+      "corpus_cooccurrence_count": 4
+    },
+    {
+      "tokens": [
+        "law",
+        "protection",
+        "equal"
+      ],
+      "token_ids": [
+        468,
+        1762,
+        2709
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.891346020758548,
+      "ppmi_13": 2.8202293336526925,
+      "ppmi_23": 6.03112994397087,
+      "ppmi_min": 2.8202293336526925,
+      "ppmi_mean": 3.914235099460704,
+      "corpus_cooccurrence_count": 177
+    },
+    {
+      "tokens": [
+        "protection",
+        "equal",
+        "discrimination"
+      ],
+      "token_ids": [
+        1762,
+        2709,
+        7493
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 6.03112994397087,
+      "ppmi_13": 3.3050620378119264,
+      "ppmi_23": 2.934385068847163,
+      "ppmi_min": 2.934385068847163,
+      "ppmi_mean": 4.090192350209986,
+      "corpus_cooccurrence_count": 19
+    },
+    {
+      "tokens": [
+        "second",
+        "third",
+        "place"
+      ],
+      "token_ids": [
+        92,
+        213,
+        223
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.679536545759448,
+      "ppmi_13": 2.576279428510085,
+      "ppmi_23": 3.0579850349693425,
+      "ppmi_min": 2.576279428510085,
+      "ppmi_mean": 2.7712670030796254,
+      "corpus_cooccurrence_count": 954
+    },
+    {
+      "tokens": [
+        "place",
+        "fourth",
+        "sixth"
+      ],
+      "token_ids": [
+        223,
+        560,
+        1391
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.1409295073449077,
+      "ppmi_13": 3.605063911327028,
+      "ppmi_23": 3.4849385478324155,
+      "ppmi_min": 3.1409295073449077,
+      "ppmi_mean": 3.41031065550145,
+      "corpus_cooccurrence_count": 50
+    },
+    {
+      "tokens": [
+        "make",
+        "going",
+        "happen"
+      ],
+      "token_ids": [
+        266,
+        735,
+        5140
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.060754260488594,
+      "ppmi_13": 4.136436166676672,
+      "ppmi_23": 5.943078657445319,
+      "ppmi_min": 2.060754260488594,
+      "ppmi_mean": 4.046756361536862,
+      "corpus_cooccurrence_count": 31
+    },
+    {
+      "tokens": [
+        "make",
+        "going",
+        "feel"
+      ],
+      "token_ids": [
+        266,
+        735,
+        1546
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 2.060754260488594,
+      "ppmi_13": 4.190676658738034,
+      "ppmi_23": 2.415020388503138,
+      "ppmi_min": 2.060754260488594,
+      "ppmi_mean": 2.8888171025765885,
+      "corpus_cooccurrence_count": 20
+    },
+    {
+      "tokens": [
+        "against",
+        "protection",
+        "discrimination"
+      ],
+      "token_ids": [
+        108,
+        1762,
+        7493
+      ],
+      "frequency_in_hallucinated": 1,
+      "frequency_in_correct": 0,
+      "ppmi_12": 3.0114120384186416,
+      "ppmi_13": 4.771265604372387,
+      "ppmi_23": 3.3050620378119264,
+      "ppmi_min": 3.0114120384186416,
+      "ppmi_mean": 3.6959132268676513,
+      "corpus_cooccurrence_count": 13
+    }
+  ]
+}
